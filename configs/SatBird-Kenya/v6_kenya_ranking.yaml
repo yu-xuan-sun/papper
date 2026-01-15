@@ -1,0 +1,463 @@
+# @package _global_
+# ================================================================
+# V6 RANKING LOSS VERSION - SatBird 平衡优化版 (KENYA VERSION)
+# 针对 topk 指标优化的配置
+# ================================================================
+
+# ================================================================
+# EXPERIMENT CONFIGURATION
+# ================================================================
+experiment:
+  # Basic info
+  task: "ebird_classifier"
+  name: "ebird_classifier"
+  dataset_name: "SatBird-Kenya"
+  dataset_shortname: "kenya"
+  exp_name: "dinov2_v6_ranking_satbird_kenya"
+  model_version: "v6_ranking"
+  seed: 42
+  deterministic: false
+  
+  # ================================================================
+  # MODEL CONFIGURATION
+  # ================================================================
+  module:
+    model: "dinov2_adapter_prompt"
+    
+    dino_model: "vit_base_patch14_dinov2.lvd142m"
+    pretrained: true
+    pretrained_path: "checkpoints/dinov2_vitb14_pretrain.pth"
+    
+    use_hierarchical_adapter: true
+    bottleneck_dim: 96
+    adapter_layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+    adapter_dropout: 0.1
+    use_adapter_attn: true
+    use_adapter_mlp: true
+
+    adapter_configs:
+      early:
+        dim: 64
+        layers: [0, 1, 2, 3]
+      middle:
+        dim: 96
+        layers: [4, 5, 6, 7]
+      late:
+        dim: 128
+        layers: [8, 9, 10, 11]
+
+    prompt_len: 30
+    use_layer_specific_prompts: true
+
+    # ================================================================
+    # RANKING LOSS CONFIGURATION
+    # ================================================================
+    use_ranking_loss: true
+    ranking_loss_type: "listwise"  # listwise 或 approx_ndcg
+    ranking_loss_weight: 0.2  # CE:Ranking = 0.8:0.2
+    ranking_temperature: 1.0
+    listwise_top_k: 30  # 考虑top30进行排序优化
+
+    use_dropkey: true
+    dropkey_rate: 0.08
+
+    freeze_backbone: true
+    unfreeze_last_n_blocks: 0
+    freeze: false
+    transfer_weights: ""
+    resume: ""
+    init_bias: "none"
+    means_path: ""
+    
+    # Environmental encoder (Kenya same dims)
+    env_hidden_dim: 2048
+    env_num_layers: 6
+
+    fusion_type: "adaptive_attention"
+    use_adaptive_fusion: true
+
+    hidden_dims: [2048, 1024]
+    dropout: 0.15
+
+    # Loss - BALANCED 调整
+    loss_type: "custom_ce"
+    use_class_weights: true
+    use_weighted_loss: true
+    presence_weight: 1.2  # ↓ 降低: 1.5 → 1.2 (平衡精确度/召回率)
+    absence_weight: 1.0
+
+    # Optimization
+    learning_rate: 0.0007  # 略微提高学习率
+    lr: 0.0007
+    weight_decay: 0.05
+    optimizer: "adamw"
+
+    scheduler: "cosine"
+    warmup_epochs: 10  # 缩短 warmup
+    min_lr: 1.0e-6
+
+    # Data augmentation - BALANCED 调整
+    mixup_alpha: 0.3  # ↓ 降低: 0.4 → 0.3 (减少边界模糊)
+    cutmix_alpha: 0.3  # ↓ 降低: 0.4 → 0.3
+    label_smoothing: 0.05  # ↓ 降低: 0.1 → 0.05 (提高精确度)
+
+    drop_path_rate: 0.2
+  
+  # ================================================================
+  # TRAINING CONFIGURATION
+  # ================================================================
+  training:
+    batch_size: 32  # 保持较小 batch size 以适应 Kenya 数据集
+    num_workers: 8
+    max_epochs: 100  # Kenya 数据集较小，减少 epochs
+
+    val_check_interval: 1.0
+    val_frequency: 1
+    
+    gradient_clip_val: 0.5
+    gradient_clip_algorithm: "norm"
+    accumulate_grad_batches: 1  # Kenya 数据较小，无需累积
+
+    precision: "16-mixed"
+    
+    save_top_k: 3
+    monitor: "val_topk"  # 改为监控 topk
+    mode: "max"
+
+    log_every_n_steps: 50
+
+  # ================================================================
+  # TESTING CONFIGURATION
+  # ================================================================
+  testing:
+    batch_size: 64
+    num_workers: 8
+
+# ================================================================
+# DATA CONFIGURATION (KENYA VERSION)
+# ================================================================
+data:
+  dataset_name: "SatBird-Kenya"
+  data_dir: "kenya"
+  
+  image_size: 224
+  channels: 3
+  bands: ["r", "g", "b"]
+  res: 10
+  datatype: "refl"
+
+  # ImageNet normalization
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+  env: ["bioclim"]
+  env_var_sizes: [19]
+  concat_env_to_sat: false
+
+  species: []
+  total_species: 1054  # Kenya 有 1054 个物种
+
+  files:
+    base: "kenya"
+
+    train: "train_split.csv"
+    val: "valid_split.csv"
+    test: "test_split.csv"
+
+    targets_folder: "targets"
+    env_data_folder: "environmental"
+    images_folder: "images"
+    species_list: "species_list.txt"
+
+    correction_thresh: ""
+
+    # === stats folder ===
+    rgb_means: "stats/means_images_visual.npy"
+    rgb_stds: "stats/stds_images_visual.npy"
+    env_means: "stats/env_means.npy"
+    env_stds: "stats/env_stds.npy"
+
+    # NIR unused but kept
+    rgbnir_means: "stats/means_rgbnir.npy"
+    rgbnir_stds: "stats/stds_rgbnir.npy"
+
+  target:
+    type: "probs"
+    subset: null
+
+  correction_factor:
+    thresh: null
+
+  multiscale: []
+  multiscale_bands: []
+  multiscale_agg: "features"
+
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+
+  loaders:
+    num_workers: 8
+    batch_size: 32
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  transforms:
+    - name: matchres
+      ignore: false
+      target_size: [224,224]
+    
+    - name: crop
+      ignore: false
+      p: 1.0
+      ignore_band: ["bioclim","ped"]
+      center: false
+      height: 224
+      width: 224
+
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+    
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["sat"]
+      custom: [[0.485,0.456,0.406], [0.229,0.224,0.225]]
+    
+    - name: randomnoise
+      ignore: true
+      std: 0.01
+      max_noise: 0.05
+
+# ================================================================
+# LOSSES CONFIGURATION - BALANCED 版本
+# ================================================================
+losses:
+  hurdle_presence_w: 1.2  # ↓ 降低: 1.5 → 1.2
+  hurdle_cond_w: 1.0
+
+# ================================================================
+# OPTIMIZER CONFIGURATION
+# ================================================================
+optimizer: "adamw"
+
+# ================================================================
+# SCHEDULER CONFIGURATION
+# ================================================================
+scheduler:
+  name: "WarmUp"
+  warmup:
+    warmup_epochs: 10  # 缩短 warmup
+    max_epochs: 100
+  step_lr:
+    step_size: 10
+    gamma: 0.5
+  reduce_lr_plateau:
+    factor: 0.1
+    lr_schedule_patience: 5
+  cyclical:
+    warmup_epochs: 10
+  bce:
+    ignore: false
+    lambd_pres: 1.2  # 对应 presence_weight
+    lambd_abs: 1.0
+  ce:
+    ignore: true
+    lambd_pres: 1.2
+    lambd_abs: 1.0
+  metrics:
+    - name: ce
+      ignore: true
+      scale: 1
+    - name: mae
+      ignore: false
+      scale: 10
+    - name: mse
+      ignore: false
+      scale: 10
+    - name: topk
+      ignore: false
+      scale: 1
+    - name: r2
+      ignore: true
+      scale: 1
+    - name: kl
+      ignore: false
+      scale: 1
+    - name: accuracy
+      ignore: true
+      scale: 1
+    - name: top10
+      ignore: false
+      scale: 1
+    - name: top30
+      ignore: false
+      scale: 1
+
+# ================================================================
+# PROGRAM CONFIGURATION
+# ================================================================
+program:
+  seed: 42
+  output_dir: "outputs"
+  data_dir: "."
+  log_dir: "runs"
+  overwrite: false
+
+# ================================================================
+# PYTORCH LIGHTNING TRAINER
+# ================================================================
+trainer:
+  accelerator: "gpu"
+  devices: 1
+  strategy: null
+  num_nodes: 1
+  max_epochs: 100  # 缩短训练
+  min_epochs: 1
+  max_steps: -1
+  min_steps: 0
+  precision: 16
+  gradient_clip_val: 0.5
+  gradient_clip_algorithm: "norm"
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+  flush_logs_every_n_steps: 100
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: true
+  benchmark: true
+  deterministic: false
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  fast_dev_run: false
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  logger: true
+  profiler: null
+  auto_lr_find: false
+  auto_scale_batch_size: false
+  resume_from_checkpoint: null
+
+# ================================================================
+# CALLBACKS
+# ================================================================
+callbacks:
+  model_checkpoint:
+    dirpath: "runs/dinov2_v6_ranking_kenya_seed42"
+    filename: "epoch{epoch:03d}_val_topk{val_topk:.4f}"
+    monitor: "val_topk"  # 改为监控 topk
+    mode: "max"
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    every_n_epochs: 1
+
+  early_stopping:
+    monitor: "val_topk"  # 改为监控 topk
+    mode: "max"
+    patience: 15  # 缩短 patience
+    min_delta: 0.001
+    verbose: true
+
+  learning_rate: 0.0007
+  learning_rate_monitor:
+    logging_interval: "step"
+
+  rich_progress_bar:
+    refresh_rate: 1
+
+# ================================================================
+# LOGGING
+# ================================================================
+logging:
+  run_name: "dinov2_v6_ranking_satbird_kenya"
+  enable_tensorboard: true
+  enable_csv: true
+
+logger:
+  tensorboard:
+    save_dir: "runs"
+    name: "dinov2_v6_ranking_kenya_seed42"
+    version: null
+    default_hp_metric: false
+
+# ================================================================
+# COMET ML
+# ================================================================
+log_comet: false
+comet:
+  project_name: "satbird_v6_ranking"
+  tags: ["dinov2", "v6_ranking", "topk_optimized", "hierarchical_adapter"]
+
+# ================================================================
+# LOCATION FEATURES
+# ================================================================
+loc:
+  use: false
+  concat: false
+  elev: false
+  num_checklists: false
+
+# ================================================================
+# OTHER SETTINGS
+# ================================================================
+save_path: ""
+load_ckpt: ""
+save_preds_path: ""
+overfit_debug: false
+overfit_batches: 0.0
+max_epochs: 200
+base_dir: ""
+
+# ================================================================
+# RANKING LOSS 版本配置摘要
+# ================================================================
+# 关键调整说明:
+# 1. label_smoothing: 0.1 → 0.05 (提高精确度，减少过度平滑)
+# 2. mixup_alpha: 0.4 → 0.3 (减少边界模糊，提升判别能力)
+# 3. cutmix_alpha: 0.4 → 0.3 (同上)
+# 4. presence_weight: 1.5 → 1.2 (平衡精确度和召回率)
+# 5. monitor: val_map → val_topk (直接优化 topk 指标)
+# 6. warmup_epochs: 15 → 10 (加快收敛)
+# 7. max_epochs: 150 → 100 (Kenya 数据集较小)
+# 8. batch_size: 128 → 32 (适应 Kenya 数据规模)
+# 9. learning_rate: 0.0005 → 0.0007 (略微提高)
+# 10. patience: 20 → 15 (加快早停)
+#
+# 预期效果:
+# - topk: ↑ 10-15% (主要提升目标)
+# - top10/30: ↓ 5-8% (可接受的权衡)
+# - loss/mae/mse: 保持或略升
+# ================================================================
+
+# ================================================================
+# RANKING LOSS 配置说明
+# ================================================================
+# 在 Balanced 基础上新增:
+# 1. use_ranking_loss: true (启用Ranking Loss)
+# 2. ranking_loss_type: listwise (KL散度排序优化)
+# 3. ranking_loss_weight: 0.2 (CE占80%, Ranking占20%)
+# 4. ranking_temperature: 1.0 (温度参数)
+# 5. listwise_top_k: 30 (优化top-30排序)
+#
+# Ranking Loss工作原理:
+# - 训练时: total_loss = 0.8 * (presence_loss + cond_loss) + 0.2 * ranking_loss
+# - Listwise Loss: 通过KL散度优化预测和真实的top-K概率分布
+# - 直接针对topk指标进行优化,效果优于单纯的Balanced配置
+#
+# 预期效果 (相比Balanced):
+# - topk: 0.20 → 0.21-0.22 (再提升 5-10%)
+# - 总提升: 0.181 → 0.21-0.22 (相比baseline提升 15-20%)
+# ================================================================

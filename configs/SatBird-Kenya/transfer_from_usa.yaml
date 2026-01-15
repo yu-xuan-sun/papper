@@ -1,0 +1,365 @@
+# @package _global_
+# ================================================================
+# 跨域迁移配置: USA Summer → Kenya
+# 策略: 冻结Backbone，只训练分类头
+# ================================================================
+
+args:
+  config: "configs/SatBird-Kenya/transfer_from_usa.yaml"
+  base_dir: ""
+  run_id: 1
+  note: "Transfer from USA-summer, freeze backbone, train classifier only"
+  no_comet: true
+  resume: false
+  tags: ["transfer", "usa_to_kenya", "freeze_backbone"]
+  dev: false
+
+experiment:
+  task: "ebird_classifier"
+  name: "ebird_classifier"
+  dataset_name: "SatBird-Kenya"
+  dataset_shortname: "kenya"
+  exp_name: "transfer_usa_to_kenya_freeze"
+  model_version: "transfer"
+  seed: 42
+  deterministic: false
+  
+  module:
+    model: "dinov2_adapter_prompt"
+    dino_model: "vit_base_patch14_dinov2.lvd142m"
+    pretrained: true
+    pretrained_path: "checkpoints/dinov2_vitb14_pretrain.pth"
+    
+    # ========== 跨域迁移配置 ==========
+    # 从USA模型迁移权重
+    transfer_from: "runs/best summer1/checkpoints/last.ckpt"
+    transfer_mode: "freeze_backbone"  # freeze_backbone | finetune_all | linear_probe
+    
+    # 通道配置 (保持与USA相同)
+    use_channel_adapter: true
+    in_channels: 4
+    channel_adapter_type: "learned"
+    
+    # Adapter配置 (保持与USA相同)
+    use_hierarchical_adapter: true
+    bottleneck_dim: 96
+    adapter_layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+    adapter_dropout: 0.1
+    use_adapter_attn: true
+    use_adapter_mlp: true
+
+    adapter_configs:
+      early:
+        dim: 64
+        layers: [0, 1, 2, 3]
+      middle:
+        dim: 96
+        layers: [4, 5, 6, 7]
+      late:
+        dim: 128
+        layers: [8, 9, 10, 11]
+
+    prompt_len: 40
+    use_layer_specific_prompts: true
+    use_ranking_loss: false
+    use_dropkey: true
+    dropkey_rate: 0.1
+
+    # ========== 冻结策略 ==========
+    freeze_backbone: true
+    freeze_adapter: true      # 冻结adapter
+    freeze_prompt: true       # 冻结prompt
+    freeze_channel_adapter: true  # 冻结通道适配器
+    unfreeze_last_n_blocks: 0
+
+    freeze: false
+    transfer_weights: ""
+    resume: ""
+    init_bias: "none"
+    means_path: ""
+    
+    # Kenya只有bioclim (19维)
+    env_hidden_dim: 512
+    env_num_layers: 3
+
+    fusion_type: "adaptive_attention"
+    use_adaptive_fusion: true
+
+    hidden_dims: [2048, 1024]
+    dropout: 0.1
+
+    loss_type: "custom_ce"
+    use_class_weights: true
+    use_weighted_loss: true
+    presence_weight: 1.5
+    absence_weight: 1.0
+
+    # 迁移学习用较大学习率训练新层
+    learning_rate: 0.003
+    lr: 0.003
+    weight_decay: 0.01
+    optimizer: "adamw"
+
+    scheduler: "cosine"
+    warmup_epochs: 5
+    min_lr: 1.0e-6
+
+    mixup_alpha: 0.0
+    cutmix_alpha: 0.0
+    label_smoothing: 0.0
+    drop_path_rate: 0.0
+  
+  training:
+    batch_size: 256
+    num_workers: 8
+    max_epochs: 50
+
+    val_check_interval: 1.0
+    val_frequency: 1
+    
+    gradient_clip_val: 1.0
+    gradient_clip_algorithm: "norm"
+    accumulate_grad_batches: 4
+
+    precision: "16-mixed"
+     
+    save_top_k: 3
+    monitor: "val_map"
+    mode: "max"
+    log_every_n_steps: 20
+
+  testing:
+    batch_size: 256
+    num_workers: 8
+
+variables: &default_vars
+  ped_means: &ped_means []
+  ped_std: &ped_std []
+  bioclim_means: &bioclim_means []
+  bioclim_std: &bioclim_std []
+  rgbnir_means: &rgbnir_means []
+  rgbnir_std: &rgbnir_std []
+  visual_means: &visual_means []
+  visual_stds: &visual_stds []
+
+data:
+  dataset_name: "SatBird-Kenya"
+  data_dir: "kenya"
+  
+  image_size: 224
+  channels: 4
+  bands: ["r", "g", "b", "nir"]
+  res: 10
+  datatype: "refl"
+
+  # Kenya只有bioclim
+  env: ["bioclim"]
+  env_var_sizes: [19]
+  concat_env_to_sat: false
+
+  species: []
+  total_species: 1054
+
+  files:
+    base: "kenya"
+    train: "train_split.csv"
+    val: "valid_split.csv"
+    test: "test_split.csv"
+    targets_folder: "targets"
+    env_data_folder: "environmental"
+    images_folder: "images"
+    species_list: "species_list.txt"
+    correction_thresh: ""
+    rgb_means: "stats/means_rgbnir.npy"
+    rgb_stds: "stats/stds_rgbnir.npy"
+    rgbnir_means: "stats/means_rgbnir.npy"
+    rgbnir_stds: "stats/stds_rgbnir.npy"
+    env_means: "stats/env_means.npy"
+    env_stds: "stats/env_stds.npy"
+
+  target:
+    type: "probs"
+    subset: null
+  correction_factor:
+    thresh: null
+  multiscale: []
+  multiscale_bands: []
+  multiscale_agg: "features"
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+
+  loaders:
+    num_workers: 8
+    batch_size: 256
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  transforms:
+    - name: matchres
+      ignore: false
+      target_size: [224,224]
+      custom_means: [*bioclim_means, *ped_means]
+    - name: crop
+      ignore: false
+      p: 1.0
+      ignore_band: ["bioclim","ped"]
+      center: false
+      height: 224
+      width: 224
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["sat"]
+      custom: [*rgbnir_means, *rgbnir_std]
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["bioclim"]
+      custom: [*bioclim_means, *bioclim_std]
+    - name: randomnoise
+      ignore: "val"
+      std: 0.01
+      max_noise: 0.05
+      p: 0.3
+
+optimizer: "adamw"
+
+scheduler:
+  name: "WarmUp"
+  warmup:
+    warmup_epochs: 5
+    max_epochs: 50
+  step_lr:
+    step_size: 10
+    gamma: 0.5
+  reduce_lr_plateau:
+    factor: 0.1
+    lr_schedule_patience: 5
+  cyclical:
+    warmup_epochs: 5
+  bce:
+    ignore: false
+    lambd_pres: 1
+    lambd_abs: 1
+  ce:
+    ignore: true
+    lambd_pres: 1
+    lambd_abs: 1
+  metrics:
+    - name: mae
+      ignore: false
+      scale: 10
+    - name: mse
+      ignore: false
+      scale: 10
+    - name: topk
+      ignore: false
+      scale: 1
+    - name: kl
+      ignore: false
+      scale: 1
+    - name: top10
+      ignore: false
+      scale: 1
+    - name: top30
+      ignore: false
+      scale: 1
+
+trainer:
+  accelerator: "gpu"
+  devices: 1
+  strategy: null
+  num_nodes: 1
+  max_epochs: 50
+  min_epochs: 1
+  max_steps: -1
+  min_steps: 0
+  precision: 16
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+  accumulate_grad_batches: 4
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 20
+  flush_logs_every_n_steps: 100
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: true
+  benchmark: true
+  deterministic: false
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  fast_dev_run: false
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  logger: true
+  profiler: null
+  auto_lr_find: false
+  auto_scale_batch_size: false
+  resume_from_checkpoint: null
+
+callbacks:
+  model_checkpoint:
+    dirpath: "runs/transfer_usa_to_kenya_freeze_seed42"
+    filename: "epoch{epoch:03d}_val_map{val_map:.4f}"
+    monitor: "val_map"
+    mode: "max"
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    every_n_epochs: 1
+  early_stopping:
+    monitor: "val_map"
+    mode: "max"
+    patience: 15
+    min_delta: 0.001
+    verbose: true
+  learning_rate: 0.001
+  learning_rate_monitor:
+    logging_interval: "step"
+  rich_progress_bar:
+    refresh_rate: 1
+
+logging:
+  run_name: "transfer_usa_to_kenya_freeze"
+  enable_tensorboard: true
+  enable_csv: true
+
+logger:
+  tensorboard:
+    save_dir: "runs"
+    name: "transfer_usa_to_kenya_freeze_seed42"
+    version: null
+    default_hp_metric: false
+
+log_comet: false
+comet:
+  project_name: "satbird_transfer"
+  tags: ["transfer", "usa_to_kenya", "freeze"]
+
+loc:
+  use: false
+  concat: false
+  elev: false
+  num_checklists: false
+
+save_path: ""
+load_ckpt: ""
+save_preds_path: ""
+overfit_debug: false
+overfit_batches: 0.0
+max_epochs: 150
+base_dir: ""

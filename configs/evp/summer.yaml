@@ -1,0 +1,21 @@
+# EVP USA-Summer 配置
+defaults:
+  - /base
+  - /SatBird-USA-summer/dinov2_v10_nir_enhanced
+  - _self_
+
+# EVP特有配置
+use_evp: true
+freeze_base: false
+
+experiment:
+  name: "evp_summer"
+  seed: 42
+  
+  module:
+    lr: 3e-4
+    weight_decay: 0.05
+    
+  trainer:
+    max_epochs: 50
+    accumulate_grad_batches: 2

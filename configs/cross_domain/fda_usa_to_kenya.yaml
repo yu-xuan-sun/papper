@@ -1,0 +1,320 @@
+# @package _global_
+# ================================================================
+# FDA-Net 跨域迁移: USA-summer → Kenya
+# 
+# 迁移策略说明:
+#   - transfer_mode: freeze_backbone (冻结backbone，只训练分类头)
+#   - transfer_mode: linear_probe (只训练最后的分类层)
+#   - transfer_mode: finetune_all (全部微调，学习率更小)
+# ================================================================
+
+# ================================================================
+# HYDRA ARGS
+# ================================================================
+args:
+  config: "configs/cross_domain/fda_usa_to_kenya.yaml"
+  base_dir: ""
+  run_id: 1
+  note: "FDA-Net Transfer: USA-summer -> Kenya"
+  no_comet: true
+  resume: false
+
+# ================================================================
+# TRANSFER CONFIGURATION - 关键迁移设置
+# ================================================================
+transfer:
+  enabled: true
+  source_checkpoint: "runs/fda_summer_seed42_XXXXXX/checkpoints/best.ckpt"  # 需要替换为实际路径
+  transfer_mode: "freeze_backbone"  # freeze_backbone / linear_probe / finetune_all
+  
+  # 可迁移的层 (这些层的权重从源域加载)
+  transferable_layers:
+    - "dino"              # DINOv2 backbone
+    - "channel_adapter"   # 通道适配器
+    - "adapted_encoder"   # 适配后的编码器
+    - "attn_adapter"      # 注意力adapter
+    - "mlp_adapter"       # MLP adapter
+    - "prompt"            # Prompt模块
+    - "fda_module"        # FDA频率模块 (关键!)
+    - "freq_decomp"       # 频率分解器
+    - "low_encoder"       # 低频编码器
+    - "high_encoder"      # 高频编码器
+    - "gate"              # 门控网络
+  
+  # 需要重新初始化的层 (与目标域相关)
+  reinit_layers:
+    - "classifier"        # 分类头 (Kenya物种数不同)
+    - "env_encoder"       # 环境编码器 (可能重新学习)
+
+# ================================================================
+# LOGGING
+# ================================================================
+logging:
+  name: fda_transfer_kenya
+  run_name: fda_transfer_kenya
+  enable_tensorboard: true
+  enable_csv: true
+  verbose: true
+
+# ================================================================
+# SEED
+# ================================================================
+seed: 42
+
+# ================================================================
+# EXPERIMENT CONFIGURATION
+# ================================================================
+experiment:
+  name: fda_transfer_kenya
+  seed: 42
+  task: ebird_classifier
+  
+  trainer:
+    max_epochs: 50  # 迁移学习通常需要更少epoch
+    accelerator: gpu
+    devices: 1
+    precision: 16
+    accumulate_grad_batches: 2
+    gradient_clip_val: 1.0
+    log_every_n_steps: 50
+    check_val_every_n_epoch: 1
+    
+  datamodule:
+    batch_size: 16
+    num_workers: 4
+    pin_memory: true
+
+  module:
+    model: dinov2_fda
+    dinov2_name: dinov2_vitb14
+    dinov2_pretrained: true
+    pretrained: true
+    freeze: true
+    proj_dim: 768
+    num_env_features: 27  # Kenya也是27维环境变量
+    dropout: 0.2
+    
+    # FDA 参数 (与源域保持一致)
+    use_fda: true
+    fda_hidden_dim: 128
+    fda_low_freq_ratio: 0.25
+    fda_learnable_freq: true
+    fda_fusion_weight: 0.3
+    fda_env_guided: true
+    fda_dropout: 0.1
+    
+    # 环境特征处理
+    env_hidden_dim: 256
+    env_output_dim: 128
+    env_num_layers: 2
+    env_use_bn: true
+    
+    # Adapter 设置
+    use_adapter: true
+    adapter_dim: 64
+    adapter_scale: 1.0
+    adapter_layers: [9, 10, 11]
+    
+    # Prompt 设置
+    use_prompt: true
+    num_tokens: 8
+    prompt_dropout: 0.1
+    
+    # 通道适配器
+    use_channel_adapter: false
+    in_channels: 3
+    
+    # 分类头配置
+    classifier:
+      hidden_dims: [512, 256]
+      dropout: 0.3
+      use_bn: true
+    
+    # 优化器配置 - 迁移学习使用更小学习率
+    lr: 5.0e-5  # 比源域训练小
+    weight_decay: 0.01
+
+# ================================================================
+# VARIABLES
+# ================================================================
+variables: &default_vars
+  ped_means: &ped_means []
+  ped_std: &ped_std []
+  bioclim_means: &bioclim_means []
+  bioclim_std: &bioclim_std []
+  rgbnir_means: &rgbnir_means []
+  rgbnir_std: &rgbnir_std []
+
+# ================================================================
+# DATA CONFIGURATION - KENYA TARGET DOMAIN
+# ================================================================
+data:
+  dataset_name: "SatBird-Kenya"
+  dataset: "SatBird-Kenya"
+  data_dir: "new_kenya2"  # Kenya数据目录
+  
+  image_size: 224
+  channels: 3
+  bands: ["r", "g", "b"]
+  res: 10
+  datatype: "refl"
+
+  env: ["bioclim", "ped"]
+  env_var_sizes: [19, 8]
+  concat_env_to_sat: false
+
+  species: []
+  total_species: 1003  # Kenya物种数
+
+  files:
+    base: "new_kenya2"
+    train: "train_split.csv"
+    val: "valid_split.csv"
+    test: "test_split.csv"
+    targets_folder: "targets"
+    env_data_folder: "environmental"
+    images_folder: "images"
+    species_list: "species_list.txt"
+    correction_thresh: ""
+    rgb_means: "stats/means_rgbnir.npy"
+    rgb_stds: "stats/stds_rgbnir.npy"
+    rgbnir_means: "stats/means_rgbnir.npy"
+    rgbnir_stds: "stats/stds_rgbnir.npy"
+    env_means: "stats/env_means.npy"
+    env_stds: "stats/env_stds.npy"
+
+  target:
+    type: "probs"
+    subset: null
+
+  correction_factor:
+    thresh: null
+
+  multiscale: []
+  multiscale_bands: []
+  multiscale_agg: "features"
+
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+
+  loaders:
+    num_workers: 4
+    batch_size: 16
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  transforms:
+    - name: matchres
+      ignore: false
+      target_size: [224,224]
+      custom_means: [*bioclim_means, *ped_means]
+    
+    - name: crop
+      ignore: false
+      p: 1.0
+      ignore_band: ["bioclim","ped"]
+      center: false
+      height: 224
+      width: 224
+
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+    
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["sat"]
+      custom: [*rgbnir_means, *rgbnir_std]
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["bioclim"]
+      custom: [*bioclim_means, *bioclim_std]
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["ped"]
+      custom: [*ped_means, *ped_std]
+    
+    - name: randomnoise
+      ignore: "val"
+      std: 0.01
+      max_noise: 0.05
+      p: 0.3
+
+# ================================================================
+# OPTIMIZER
+# ================================================================
+optimizer: "adamw"
+
+# ================================================================
+# SCHEDULER - 迁移学习用更温和的schedule
+# ================================================================
+scheduler:
+  name: "WarmUp"
+  warmup:
+    warmup_epochs: 3
+    max_epochs: 50
+  step_lr:
+    step_size: 15
+
+# ================================================================
+# LOSSES
+# ================================================================
+losses:
+  criterion: mse
+
+# ================================================================
+# TRAINING
+# ================================================================
+max_epochs: 50
+limit_train_batches: null
+limit_val_batches: null
+check_val_every_n_epoch: 1
+log_every_n_steps: 50
+accumulate_grad_batches: 2
+gradient_clip_val: 1.0
+precision: 16
+
+# ================================================================
+# EARLY STOPPING
+# ================================================================
+early_stopping:
+  enabled: true
+  monitor: val_loss
+  patience: 10
+  mode: min
+
+# ================================================================
+# MODEL CHECKPOINT
+# ================================================================
+checkpoint:
+  monitor: val_loss
+  mode: min
+  save_top_k: 3
+  save_last: true
+
+# ================================================================
+# BASE DIR
+# ================================================================
+base_dir: ""
+
+# ================================================================
+# HYDRA OUTPUT
+# ================================================================
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/fda_transfer_kenya

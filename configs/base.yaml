@@ -1,0 +1,210 @@
+# where to save checkpoints
+save_path: ""
+
+# load existing checkpoint for inference. If passing experiment folder instead (for multiple seeds), it will evaluate all of them.
+#load_ckpt_path: "runs/dinov2_vits14test_seed42_20250925-191201/checkpoints/best-09-0.0567.ckpt"
+load_ckpt_path: ""
+save_preds_path: ""
+log_comet: true
+logging:
+  run_name: "dinov2_vitb14winter"   # 自定义名字（影响输出目录）
+  enable_tensorboard: true
+  enable_csv: true
+
+overfit_batches: 0.0
+# maximum number of epochs to train for
+max_epochs: 50
+# base directory
+base_dir: ""
+
+comet:
+  project_name: "neurips_baselines" #"ecosystem-duck"
+  tags: ["resnet18"]
+  experiment_name: "" # specify for training, or use to report test results
+  experiment_key: ""  # use to report test results
+
+
+experiment:
+  module:
+     model: "dinov2"
+     dinov2_name: "dinov2_vitb14"  # timm name; 若 timm 不支持, 改 "dinov2_vits14" 用 hub
+     dinov2_pretrained: true
+     n_prompts: 8
+     env_backbone: "resnet18"
+     freeze_dinov2: true
+     finetune_schedule:
+       freeze_epochs: 5            # 前 5 个 epoch 只训练 prompt/adpater/env 分支
+       lr_after_unfreeze: 5.0e-05  # 解冻骨干后的学习率
+       lr_warmup_epochs: 2         # 解冻后前 2 个 epoch 线性 warmup
+    # 降显存选项
+     use_grad_ckpt: true      # 为 ViT 启用梯度检查点
+     use_channels_last: true  # 使用 channels_last 内存格式
+     proj_dim: 768
+     use_global_prompt: true
+     use_block_prompts: true
+     block_prompt_length: 4
+     block_prompt_dropout: 0.1
+     adapter_reduction: 16
+     adapter_dropout: 0.1
+     condition_prompts_on_env: true
+     train_block_layer_norm: true
+     lr: 7.5e-05
+     train_prompts_when_frozen: true
+
+optimizer: "Adam"
+
+losses:
+  criterion: "CE"  # or MAE / MSE / Focal / RMSLE
+  presence_weight: 1.3
+  absence_weight: 1.0
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+
+auto_lr_find: False
+scheduler:
+  name: "StepLR"
+  reduce_lr_plateau:
+    factor: 0.5
+    lr_schedule_patience: 10
+  step_lr:
+    step_size: 12
+    gamma: 0.6
+  warmup:
+    warmup_epochs: 5
+    max_epochs: 100
+  cyclical:
+    warmup_epochs: 10
+
+variables: &default_vars
+  ped_means: &ped_means []
+  ped_std: &ped_std []
+  bioclim_means: &bioclim_means []
+  bioclim_std: &bioclim_std []
+  rgbnir_means: &rgbnir_means []
+  rgbnir_std: &rgbnir_std []
+  visual_means: &visual_means []
+  visual_stds: &visual_stds []
+
+data:
+  loaders:
+    num_workers: 8
+    batch_size: 256
+
+  datatype: "refl"
+  multiscale: [224]
+  bands: ["r","g","b","nir"]
+  res: 10
+
+  # 启用环境变量（之前是 []）
+  env: ["bioclim", "ped"]
+  env_var_sizes: [19, 8]
+  # 将环境变量作为单独输入而不是拼到图像通道（dinov2 建议 false）
+  concat_env_to_sat: false
+
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+
+  files:
+    base: "/datanew/sunyuxuan/SatBird/USA_winter"
+    train: "train_split.csv"
+    val: "valid_split.csv"
+    test: "test_split.csv"
+
+    targets_folder: "targets"
+    env_data_folder: "environmental"
+    images_folder: "images"
+    correction_thresh: "range_maps.pkl"
+
+    rgbnir_means: "stats/means_rgbnir.npy"
+    rgbnir_stds: "stats/stds_rgbnir.npy"
+
+    rgb_means: "stats/means_images_visual.npy"
+    rgb_stds: "stats/stds_images_visual.npy"
+
+    env_means: "stats/env_means.npy"
+    env_stds: "stats/env_stds.npy"
+
+  correction_factor:
+    thresh:
+
+  target:
+    type: "probs"
+    subset:
+
+  transforms:
+    - name: crop
+      ignore: false
+      p: 1
+      ignore_band: ["bioclim", "ped"]
+      center: true
+      height: 224
+      width: 224
+
+    - name: matchres
+      ignore: false
+      subset: ["bioclim", "ped"]
+      target_size: [224, 224]
+      custom_means: [*bioclim_means, *ped_means]
+
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+
+    - name: normalize
+      normalize_by_255: False
+      ignore: False
+      maxchan: false
+      subset: ["sat"]
+      custom: [*rgbnir_means, *rgbnir_std]
+
+    - name: normalize
+      normalize_by_255: False
+      ignore: False
+      maxchan: false
+      subset: ["bioclim"]
+      custom: [*bioclim_means, *bioclim_std]
+
+    - name: normalize
+      normalize_by_255: False
+      ignore: False          # 改为 False 使 ped 生效
+      maxchan: False
+      subset: ["ped"]
+      custom: [*ped_means, *ped_std]
+
+    - name: randomnoise
+      ignore: "val"
+      std: 0.01
+      max_noise: 0.05
+      p: 0.35
+
+    - name: blur
+      ignore: "val"
+      p: 0.5
+      val: 0.1
+
+    - name: rotate
+      ignore: "val"
+      p: 0.5
+      val: 15
+
+    - name: randomcontrast
+      ignore: "val"
+      p: 0.35
+      val: 2
+
+    - name: randombrightness
+      ignore: "val"
+      p: 0.3
+      val: 2
+
+  total_species: 670
+
+# 训练器附加参数（可按需调整）
+trainer:
+  accumulate_grad_batches: 4

@@ -1,0 +1,264 @@
+save_path: ""
+load_ckpt : ""
+load_ckpt_path: ""
+#log the experiment to comet ? 
+log_comet: true
+save_preds_path: ""
+#overfit batches (for debugging)
+overfit_debug: false
+#number of batches to overfit on 
+overfit_batches: 0
+
+#use location?
+loc:
+  use: false
+  #if false, loc network and image network are trained separately and the output multipliesd as in the geopriors paper.
+  #else, we concatenate features from the two subnetworks and a part is trained jointly
+  concat: false
+  #use elevation data for z in location (for now, leave as False, until elevation data is integrated)
+  elev: false
+  #take into account number of available checklists at a hotspot (leave False for now)
+  num_checklists: false
+  
+comet:
+  project_name: "env_ecosystem" #"ecosystem-duck"
+  tags: ["test_run"]
+
+experiment:
+  task: "ebird_classifier"
+  name: "ebird_classifier"
+  seed: 42
+
+  module:
+    model: "resnet18"
+    pretrained: True
+    transfer_weights: ""
+    init_bias: "means"
+    means_path: ""
+    lr: 0.001
+    resume: ""
+    freeze: false
+    use_weighted_loss: False
+    loss_weight: "log" #"log", "nchklists"
+
+optimizer: "SGD"  #"Adam"
+
+scheduler: 
+  name: "StepLR" #"ReduceLROnPlateau" #"ReduceLROnPlateau" #or "StepLR" "WarmUp"
+  reduce_lr_plateau:
+    factor: 0.1
+    lr_schedule_patience: 5
+  step_lr:
+    step_size: 10 
+    gamma: 0.5
+  warmup:
+    warmup_epochs: 10
+    max_epochs: 500
+    
+  cyclical:
+    warmup_epochs: 10
+
+variables: &default_vars
+    ped_means: &ped_means []
+    ped_std: &ped_std []
+    bioclim_means: &bioclim_means []
+    bioclim_std: &bioclim_std []
+
+    rgbnir_means: &rgbnir_means []
+    rgbnir_std: &rgbnir_std []
+
+    visual_means: &visual_means []
+    visual_stds: &visual_stds []
+
+data:
+  loaders:
+    num_workers: 4
+    batch_size: 8
+  #What kind of satellite input ? "refl" for "raw" reflectance values or "img" for 0-255 values (only supported for "rgb" and "nir" bands)
+  datatype: "refl" 
+  
+  bands: ["r", "g", "b", "nir"]
+  res: 10 
+  
+  env: [] #["bioclim", "ped"]
+  env_var_sizes: [] #[19, 8]
+
+  multiscale : [512,224]
+  multiscale_bands: ['landuse','sats']    #choices: [landuse ,sat]
+  multiscale_agg: 'features'    #choices [features, vectors]
+  ped: 
+      #pedological rasters
+      res: 250
+  bioclim: 
+      #bioclim 
+      res: 1000
+  files:
+    base: ""
+    train: ""
+    val: ""
+    test: ""
+
+    targets_folder: ""
+    env_data_folder: ""
+    images_folder: ""
+    correction_thresh: "" # range maps - threshold = False
+
+    rgbnir_means: ""
+    rgbnir_stds: ""
+
+    rgb_means: ""
+    rgb_stds: ""
+
+    env_means: ""
+    env_stds: ""
+
+  correction_factor:
+     thresh:  # to train with RM
+
+  target:
+    type: "probs"  #binary or probs
+    # choose subset of birds : "ducks" for trying on species [37] or "songbirds" (307 species) or None (full set 684 species)
+    subset:
+ 
+  #normalization: None
+  transforms:
+    - name: matchres
+      ignore: false
+      target_size: [64, 64]
+      
+    - name: crop
+      ignore: false
+      p: 1
+      ignore_band: ["bioclim", "ped"]
+      center: true # disable randomness, crop around the image's center
+      height: 64
+      width: 64
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+    - name: normalize
+      normalize_by_255: False
+      ignore: false
+      maxchan: false
+      subset: ["sat"]
+      custom: [*rgbnir_means, *rgbnir_std]
+    - name: normalize
+      normalize_by_255: False
+      ignore: false
+      maxchan: false
+      subset: ["bioclim"]
+      custom: [*bioclim_means, *bioclim_std]
+    - name: normalize
+      normalize_by_255: False
+      ignore: false
+      maxchan: false
+      subset: ["ped"] #soil data
+      custom: [*ped_means, *ped_std]
+    - name: randomnoise
+      ignore: True #false
+      std: 0.01
+      max_noise: 0.05
+  species: []
+  total_species: 684
+    
+program: # These are the arguments that define how the train.py script works
+  seed: 1337
+  output_dir: output
+  data_dir: data
+  log_dir: logs
+  overwrite: False
+  
+losses:
+#scale attribute is just for plotting if the values are very small 
+
+  criterion: "CE" #or MAE or MSE  (loss to choosefor optim )
+  ce:
+    ignore: False
+      #weights on the cross entropy
+    lambd_pres: 1
+    lambd_abs: 1
+  metrics:
+    - name: ce
+      ignore: True
+      #weights on the cross entropy
+      lambd_pres: 1
+      lambd_abs: 1
+      scale : 1
+    - name: mae
+      ignore: False
+      scale: 10
+    - name: mse
+      ignore: False
+      scale: 10
+    - name: topk
+      ignore: False
+      scale: 1
+    - name: r2
+      ignore: True #False
+      scale: 1
+    - name: kl
+      ignore: False
+      scale : 1
+    - name: accuracy
+      ignore: True
+      scale: 1
+    - name: top10
+      ignore: False
+      scale: 1
+    - name: top30
+      ignore: False
+      scale: 1
+        
+# The values here are taken from the defaults here https://pytorch-lightning.readthedocs.io/en/1.3.8/common/trainer.html#init
+# this probably should be made into a schema, e.g. as shown https://omegaconf.readthedocs.io/en/2.0_branch/structured_config.html#merging-with-other-configs
+trainer: # These are the parameters passed to the pytorch lightning Trainer object
+  logger: True
+  checkpoint_callback: True
+  callbacks: null
+  default_root_dir: null
+  gradient_clip_val: 0.0
+  process_position: 0
+  num_nodes: 1
+  num_processes: 1
+  gpus: 1
+  auto_select_gpus: False
+  tpu_cores: null
+  log_gpu_memory: null
+  progress_bar_refresh_rate: null
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  check_val_every_n_epoch: 1
+  fast_dev_run: False
+  accumulate_grad_batches: 1
+  max_epochs: 400
+  min_epochs: null
+  max_steps: null
+  min_steps: null
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  val_check_interval: 1.0
+  flush_logs_every_n_steps: 100
+  log_every_n_steps: 1
+  accelerator: null
+  sync_batchnorm: False
+  precision: 32 #32
+  weights_summary: "top"
+  weights_save_path: null
+  num_sanity_val_steps: 2
+  resume_from_checkpoint: null
+  profiler: null
+  benchmark: False
+  deterministic: False
+  reload_dataloaders_every_epoch: False
+  auto_lr_find: False
+  replace_sampler_ddp: True
+  terminate_on_nan: False
+  auto_scale_batch_size: True
+  prepare_data_per_node: True
+  plugins: null
+  amp_backend: "native"
+  move_metrics_to_cpu: False

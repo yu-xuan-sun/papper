@@ -1,0 +1,504 @@
+# @package _global_
+# ================================================================
+# EVP V3 USA-SUMMER - Environment-aware Visual Prompt Tuning
+# V3创新点: 
+#   1. 只在最后4层使用EVP（减少对早期层干扰）
+#   2. 更强的门控机制（初始gate接近0）
+#   3. 低秩分解大幅减少参数量
+# ================================================================
+
+# ================================================================
+# HYDRA ARGS
+# ================================================================
+args:
+  config: "configs/SatBird-USA-summer/evp_summer.yaml"
+  base_dir: ""
+  run_id: 1
+  note: "EVP V3 - Last 4 Layers + Strong Gate"
+  no_comet: true
+  resume: false
+  tags: ["evp_v3", "nir", "4channel", "innovation", "strong_gate"]
+  dev: false
+
+# ================================================================
+# EXPERIMENT CONFIGURATION
+# ================================================================
+experiment:
+  task: "ebird_classifier"
+  name: "ebird_classifier"
+  dataset_name: "SatBird-USA-summer"
+  dataset_shortname: "summer"
+  exp_name: "evp_v3_summer"
+  model_version: "evp_v3"
+  seed: 42
+  deterministic: false
+  
+  # ================================================================
+  # MODEL CONFIGURATION - EVP V3
+  # ================================================================
+  module:
+    model: "dinov2_evp"  # 使用EVP模型
+    
+    dino_model: "vit_base_patch14_dinov2.lvd142m"
+    pretrained: true
+    pretrained_path: "checkpoints/dinov2_vitb14_pretrain.pth"
+    
+    # === NIR通道适配器 ===
+    use_channel_adapter: true
+    in_channels: 4  # RGBNIR
+    channel_adapter_type: "learned"
+    
+    # === Adapter配置 (保留原有配置) ===
+    use_hierarchical_adapter: true
+    bottleneck_dim: 96
+    adapter_layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+    adapter_dropout: 0.1
+    use_adapter_attn: true
+    use_adapter_mlp: true
+
+    # 分层Adapter配置
+    adapter_configs:
+      early:
+        dim: 64
+        layers: [0, 1, 2, 3]
+      middle:
+        dim: 96
+        layers: [4, 5, 6, 7]
+      late:
+        dim: 128
+        layers: [8, 9, 10, 11]
+
+    # === Prompt配置 ===
+    prompt_len: 15
+    use_layer_specific_prompts: true
+
+    # === EVP V3 特定配置 ===
+    use_evp: true
+    evp_hidden_dim: 256        # 降低隐藏层维度
+    evp_dropout: 0.12
+    evp_rank: 8               # 低秩分解
+    evp_layers: [11] # 只在最后4层使用EVP
+    evp_gate_init: -3.0        # 初始gate≈0.047，让模型从baseline开始逐渐学习
+    freeze_base_for_evp: false # 不冻结基础模型，联合训练
+
+    # === 正则化 ===
+    use_dropkey: true
+    dropkey_rate: 0.13
+    use_ranking_loss: false
+
+    # === Backbone配置 ===
+    freeze_backbone: true
+    unfreeze_last_n_blocks: 4
+    freeze: false
+    transfer_weights: ""
+    resume: ""
+    init_bias: "none"
+    means_path: ""
+    
+    # === 环境特征融合 ===
+    env_hidden_dim: 1024
+    env_num_layers: 4
+    fusion_type: "adaptive_attention"
+    use_adaptive_fusion: true
+
+    # === 分类器 ===
+    hidden_dims: [2048, 1024]
+    dropout: 0.13
+
+    # === Loss配置 ===
+    loss_type: "custom_ce"
+    use_class_weights: true
+    use_weighted_loss: true
+    presence_weight: 1.5
+    absence_weight: 1.0
+
+    # === 优化器配置 ===
+    learning_rate: 0.00007
+    lr: 0.0007
+    weight_decay: 0.025
+    optimizer: "adamw"
+
+    scheduler: "WarmUp"
+    warmup_epochs: 20
+    min_lr: 1.0e-6
+
+    # === 数据增强 ===
+    mixup_alpha: 0.4
+    cutmix_alpha: 0.4
+    label_smoothing: 0.08
+    drop_path_rate: 0.2
+  
+  # ================================================================
+  # TRAINING CONFIGURATION
+  # ================================================================
+  training:
+    batch_size: 64
+    num_workers: 8
+    max_epochs: 150
+
+    val_check_interval: 1.0
+    val_frequency: 1
+    
+    gradient_clip_val: 0.5
+    gradient_clip_algorithm: "norm"
+    accumulate_grad_batches: 4
+
+    precision: 16
+    
+    save_top_k: 3
+    monitor: "val_map"
+    mode: "max"
+
+    log_every_n_steps: 50
+
+  testing:
+    batch_size: 64
+    num_workers: 8
+
+# ================================================================
+# VARIABLES - 归一化统计量 (会被从文件加载覆盖)
+# ================================================================
+variables: &default_vars
+  ped_means: &ped_means []
+  ped_std: &ped_std []
+  bioclim_means: &bioclim_means []
+  bioclim_std: &bioclim_std []
+  rgbnir_means: &rgbnir_means []
+  rgbnir_std: &rgbnir_std []
+  visual_means: &visual_means []
+  visual_stds: &visual_stds []
+
+# ================================================================
+# DATA CONFIGURATION - 使用RGBNIR 4通道 (原始反射率)
+# ================================================================
+data:
+  dataset_name: "SatBird-USA-summer"
+  dataset: "SatBird-USA-summer"
+  data_dir: "USA_summer"
+  
+  image_size: 224
+  channels: 4
+  bands: ["r", "g", "b", "nir"]
+  res: 10
+  datatype: "refl"
+
+  env: ["bioclim", "ped"]
+  env_var_sizes: [19, 8]
+  concat_env_to_sat: false
+
+  species: []
+  total_species: 624
+
+  files:
+    base: "USA_summer"
+    train: "train_split.csv"
+    val: "valid_split.csv"
+    test: "test_split.csv"
+    targets_folder: "targets"
+    env_data_folder: "environmental"
+    images_folder: "images"
+    species_list: "species_list.txt"
+    correction_thresh: ""
+    rgb_means: "stats/means_rgbnir.npy"
+    rgb_stds: "stats/stds_rgbnir.npy"
+    rgbnir_means: "stats/means_rgbnir.npy"
+    rgbnir_stds: "stats/stds_rgbnir.npy"
+    env_means: "stats/env_means.npy"
+    env_stds: "stats/env_stds.npy"
+
+  target:
+    type: "probs"
+    subset: null
+
+  correction_factor:
+    thresh: null
+
+  # 禁用multiscale
+  multiscale: []
+  multiscale_bands: []
+  multiscale_agg: "features"
+
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+
+  loaders:
+    num_workers: 8
+    batch_size: 64
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  transforms:
+    - name: matchres
+      ignore: false
+      target_size: [224,224]
+      custom_means: [*bioclim_means, *ped_means]
+    
+    - name: crop
+      ignore: false
+      p: 1.0
+      ignore_band: ["bioclim","ped"]
+      center: false
+      height: 224
+      width: 224
+
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+    
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["sat"]
+      custom: [*rgbnir_means, *rgbnir_std]
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["bioclim"]
+      custom: [*bioclim_means, *bioclim_std]
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["ped"]
+      custom: [*ped_means, *ped_std]
+    
+    - name: randomnoise
+      ignore: "val"
+      std: 0.01
+      max_noise: 0.05
+      p: 0.35
+
+# ================================================================
+# OPTIMIZER CONFIGURATION
+# ================================================================
+optimizer: "adamw"
+
+# ================================================================
+# SCHEDULER CONFIGURATION
+# ================================================================
+scheduler:
+  name: "WarmUp"
+  warmup:
+    warmup_epochs: 20
+    max_epochs: 150
+  step_lr:
+    step_size: 10
+    gamma: 0.5
+  reduce_lr_plateau:
+    factor: 0.1
+    lr_schedule_patience: 5
+  cyclical:
+    warmup_epochs: 20
+  bce:
+    ignore: false
+    lambd_pres: 1
+    lambd_abs: 1
+  ce:
+    ignore: true
+    lambd_pres: 1
+    lambd_abs: 1
+  metrics:
+    - name: ce
+      ignore: true
+      scale: 1
+    - name: mae
+      ignore: false
+      scale: 10
+    - name: mse
+      ignore: false
+      scale: 10
+    - name: topk
+      ignore: false
+      scale: 1
+    - name: r2
+      ignore: true
+      scale: 1
+    - name: kl
+      ignore: false
+      scale: 1
+    - name: accuracy
+      ignore: true
+      scale: 1
+    - name: top10
+      ignore: false
+      scale: 1
+    - name: top30
+      ignore: false
+      scale: 1
+
+# ================================================================
+# PYTORCH LIGHTNING TRAINER
+# ================================================================
+trainer:
+  accelerator: "gpu"
+  devices: 1
+  strategy: null
+  num_nodes: 1
+  max_epochs: 150
+  min_epochs: 1
+  max_steps: -1
+  min_steps: 0
+  precision: 16
+  gradient_clip_val: 0.5
+  gradient_clip_algorithm: "norm"
+  accumulate_grad_batches: 4
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+  flush_logs_every_n_steps: 100
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: true
+  benchmark: true
+  deterministic: false
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  fast_dev_run: false
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  logger: true
+  profiler: null
+  auto_lr_find: false
+  auto_scale_batch_size: false
+  resume_from_checkpoint: null
+
+# ================================================================
+# LOSSES
+# ================================================================
+losses:
+  criterion: "CE"
+  ce:
+    ignore: false
+    lambd_pres: 1.5
+    lambd_abs: 1.0
+  metrics:
+    - name: ce
+      ignore: true
+      scale: 1
+    - name: mae
+      ignore: false
+      scale: 10
+    - name: mse
+      ignore: false
+      scale: 10
+    - name: topk
+      ignore: false
+      scale: 1
+    - name: r2
+      ignore: true
+      scale: 1
+    - name: kl
+      ignore: false
+      scale: 1
+    - name: accuracy
+      ignore: true
+      scale: 1
+    - name: top10
+      ignore: false
+      scale: 1
+    - name: top30
+      ignore: false
+      scale: 1
+
+# ================================================================
+# CALLBACKS
+# ================================================================
+callbacks:
+  model_checkpoint:
+    dirpath: "runs/evp_v3_summer_seed42"
+    filename: "epoch{epoch:03d}_val_map{val_map:.4f}"
+    monitor: "val_map"
+    mode: "max"
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    every_n_epochs: 1
+
+  early_stopping:
+    monitor: "val_map"
+    mode: "max"
+    patience: 20
+    min_delta: 0.001
+    verbose: true
+
+  learning_rate: 0.0006
+  learning_rate_monitor:
+    logging_interval: "step"
+
+  rich_progress_bar:
+    refresh_rate: 1
+
+# ================================================================
+# LOGGING
+# ================================================================
+logging:
+  run_name: "evp_v3_summer"
+  enable_tensorboard: true
+  enable_csv: true
+
+logger:
+  tensorboard:
+    save_dir: "runs"
+    name: "evp_v3_summer_seed42"
+    version: null
+    default_hp_metric: false
+
+log_comet: false
+comet:
+  project_name: "satbird_evp"
+  tags: ["evp_v3", "dinov2", "innovation", "strong_gate"]
+
+loc:
+  use: false
+  concat: false
+  elev: false
+  num_checklists: false
+
+save_path: "runs"
+load_ckpt: ""
+save_preds_path: ""
+overfit_debug: false
+overfit_batches: 0.0
+max_epochs: 200
+base_dir: ""
+
+# ================================================================
+# EVP V3 创新点说明
+# ================================================================
+# 1. 只在最后4层使用EVP (evp_layers: [8, 9, 10, 11])
+#    - 早期层(0-7): 使用原有静态prompts，保持低级特征提取稳定
+#    - 后期层(8-11): 使用环境感知的动态prompts，进行语义级融合
+#    - 参数量进一步减少: 12层->4层，约减少66%
+#
+# 2. 更强的门控机制 (evp_gate_init: -3.0)
+#    - 初始gate值: sigmoid(-3.0) ≈ 0.047
+#    - 模型开始时几乎完全使用base prompts
+#    - 训练过程中逐渐学习何时、多少使用EVP贡献
+#    - 避免EVP干扰baseline性能
+#
+# 3. 低秩分解 (evp_rank: 16)
+#    - 大幅减少参数: 从192M降至~0.9M
+#    - 保持足够表达能力
+#
+# 与V2的区别:
+#    - evp_layers: 所有12层 -> 仅最后4层
+#    - gate初始值: 0.5 -> 0.047
+#    - 参数量: ~2.6M -> ~0.9M
+#
+# 预期效果:
+#    - 训练初期表现接近baseline
+#    - 随着训练gate值增加，EVP贡献逐渐提升
+#    - 如果EVP有效，gate值会增加; 如果无效，gate值保持接近0

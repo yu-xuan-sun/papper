@@ -1,0 +1,488 @@
+# @package _global_
+# ================================================================
+# HGCP + FDA USA-SUMMER
+# 创新点组合:
+#   HGCP:
+#     1. 全层使用差异化策略 (浅层纹理抑制/中层边缘增强/深层语义先验)
+#     2. HyperNetwork替代线性投影 (更强非线性建模能力)
+#     3. 层间信息传递 (hierarchical reasoning)
+#     4. 通道级注意力门控 (而非标量门控)
+#   FDA:
+#     5. 傅里叶变换频率分解 (低频/高频分离)
+#     6. 双分支编码器 (域不变/域特定特征)
+#     7. 自适应频率门控 (环境引导融合)
+# ================================================================
+
+# ================================================================
+# HYDRA ARGS
+# ================================================================
+args:
+  config: "configs/SatBird-USA-summer/hgcp_fda_summer.yaml"
+  base_dir: ""
+  run_id: 1
+  note: "HGCP+FDA - Combined Innovation"
+  no_comet: true
+  resume: false
+  tags: ["hgcp", "fda", "nir", "4channel", "innovation", "cross-domain"]
+  dev: false
+
+# ================================================================
+# EXPERIMENT CONFIGURATION
+# ================================================================
+experiment:
+  task: "ebird_classifier"
+  name: "ebird_classifier"
+  dataset_name: "SatBird-USA-summer"
+  dataset_shortname: "summer"
+  exp_name: "hgcp_fda_summer"
+  model_version: "hgcp_fda_v1"
+  seed: 42
+  deterministic: false
+  
+  # ================================================================
+  # MODEL CONFIGURATION - HGCP + FDA
+  # ================================================================
+  module:
+    model: "dinov2_hgcp_fda"  # 使用HGCP+FDA集成模型
+    
+    dino_model: "vit_base_patch14_dinov2.lvd142m"
+    pretrained: true
+    pretrained_path: "checkpoints/dinov2_vitb14_pretrain.pth"
+    
+    # === NIR通道适配器 ===
+    use_channel_adapter: true
+    in_channels: 4  # RGBNIR
+    channel_adapter_type: "learned"
+    
+    # === Adapter配置 ===
+    use_hierarchical_adapter: true
+    bottleneck_dim: 96
+    adapter_layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+    adapter_dropout: 0.1
+    use_adapter_attn: true
+    use_adapter_mlp: true
+
+    adapter_configs:
+      early:
+        dim: 64
+        layers: [0, 1, 2, 3]
+      middle:
+        dim: 96
+        layers: [4, 5, 6, 7]
+      late:
+        dim: 128
+        layers: [8, 9, 10, 11]
+
+    # === Prompt配置 ===
+    prompt_len: 10
+    use_layer_specific_prompts: true
+
+    # === HGCP 特定配置 ===
+    use_hgcp: true
+    hgcp_hidden_dim: 256
+    hgcp_dropout: 0.1
+    hgcp_rank: 16
+    use_channel_gate: true
+    hgcp_gate_init: -2.0
+    freeze_base_for_hgcp: false
+
+    # === FDA 特定配置 (新增) ===
+    use_fda: true
+    fda_hidden_dim: 128
+    fda_low_freq_ratio: 0.25
+    fda_learnable_freq: true
+    fda_fusion_weight: 0.3
+    fda_dropout: 0.1
+
+    # === 正则化 ===
+    use_dropkey: true
+    dropkey_rate: 0.12
+    use_ranking_loss: false
+
+    # === Backbone配置 ===
+    freeze_backbone: true
+    unfreeze_last_n_blocks: 2
+    freeze: false
+    transfer_weights: ""
+    resume: ""
+    init_bias: "none"
+    means_path: ""
+    
+    # === 环境特征融合 ===
+    env_hidden_dim: 512
+    env_num_layers: 3
+    fusion_type: "adaptive_attention"
+    use_adaptive_fusion: true
+
+    # === 分类器 ===
+    hidden_dims: [1024, 512]
+    dropout: 0.2
+
+    # === Loss配置 ===
+    loss_type: "custom_ce"
+    use_class_weights: true
+    use_weighted_loss: true
+    presence_weight: 1.5
+    absence_weight: 1.0
+
+    # === 优化器配置 ===
+    learning_rate: 0.0005
+    lr: 0.0005
+    weight_decay: 0.02
+    optimizer: "adamw"
+
+    scheduler: "WarmUp"
+    warmup_epochs: 10
+    min_lr: 1.0e-6
+
+    # === 数据增强 ===
+    mixup_alpha: 0.3
+    cutmix_alpha: 0.3
+    label_smoothing: 0.1
+    drop_path_rate: 0.1
+  
+  # ================================================================
+  # TRAINING CONFIGURATION
+  # ================================================================
+  training:
+    batch_size: 16  # 降低batch size以适应更大模型
+    num_workers: 4
+    max_epochs: 100
+
+    val_check_interval: 1.0
+    val_frequency: 1
+    
+    gradient_clip_val: 0.5
+    gradient_clip_algorithm: "norm"
+    accumulate_grad_batches: 4  # 增加梯度累积
+
+    precision: 16
+    
+    save_top_k: 3
+    monitor: "val_map"
+    mode: "max"
+
+    log_every_n_steps: 200  # 减少日志频率
+
+  testing:
+    batch_size: 16
+    num_workers: 4
+
+# ================================================================
+# VARIABLES
+# ================================================================
+variables: &default_vars
+  ped_means: &ped_means []
+  ped_std: &ped_std []
+  bioclim_means: &bioclim_means []
+  bioclim_std: &bioclim_std []
+  rgbnir_means: &rgbnir_means []
+  rgbnir_std: &rgbnir_std []
+  visual_means: &visual_means []
+  visual_stds: &visual_stds []
+
+# ================================================================
+# DATA CONFIGURATION - RGBNIR 4通道
+# ================================================================
+data:
+  dataset_name: "SatBird-USA-summer"
+  dataset: "SatBird-USA-summer"
+  data_dir: "USA_summer"
+  
+  image_size: 224
+  channels: 4
+  bands: ["r", "g", "b", "nir"]
+  res: 10
+  datatype: "refl"
+
+  env: ["bioclim", "ped"]
+  env_var_sizes: [19, 8]
+  concat_env_to_sat: false
+
+  species: []
+  total_species: 670
+
+  files:
+    base: "USA_summer"
+    train: "train_split.csv"
+    val: "valid_split.csv"
+    test: "test_split.csv"
+    targets_folder: "targets"
+    env_data_folder: "environmental"
+    images_folder: "images"
+    species_list: "species_list.txt"
+    correction_thresh: ""
+    rgb_means: "stats/means_rgbnir.npy"
+    rgb_stds: "stats/stds_rgbnir.npy"
+    rgbnir_means: "stats/means_rgbnir.npy"
+    rgbnir_stds: "stats/stds_rgbnir.npy"
+    env_means: "stats/env_means.npy"
+    env_stds: "stats/env_stds.npy"
+
+  target:
+    type: "probs"
+    subset: null
+
+  correction_factor:
+    thresh: null
+
+  multiscale: []
+  multiscale_bands: []
+  multiscale_agg: "features"
+
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+
+  loaders:
+    num_workers: 4
+    batch_size: 16
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  transforms:
+    - name: matchres
+      ignore: false
+      target_size: [224,224]
+      custom_means: [*bioclim_means, *ped_means]
+    
+    - name: crop
+      ignore: false
+      p: 1.0
+      ignore_band: ["bioclim","ped"]
+      center: false
+      height: 224
+      width: 224
+
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+    
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["sat"]
+      custom: [*rgbnir_means, *rgbnir_std]
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["bioclim"]
+      custom: [*bioclim_means, *bioclim_std]
+
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["ped"]
+      custom: [*ped_means, *ped_std]
+    
+    - name: randomnoise
+      ignore: "val"
+      std: 0.01
+      max_noise: 0.05
+      p: 0.3
+
+# ================================================================
+# OPTIMIZER CONFIGURATION
+# ================================================================
+optimizer: "adamw"
+
+# ================================================================
+# SCHEDULER CONFIGURATION
+# ================================================================
+scheduler:
+  name: "WarmUp"
+  warmup:
+    warmup_epochs: 10
+    max_epochs: 100
+  step_lr:
+    step_size: 10
+    gamma: 0.5
+  reduce_lr_plateau:
+    factor: 0.1
+    lr_schedule_patience: 5
+  cyclical:
+    warmup_epochs: 10
+  bce:
+    ignore: false
+    lambd_pres: 1
+    lambd_abs: 1
+  ce:
+    ignore: true
+    lambd_pres: 1
+    lambd_abs: 1
+  metrics:
+    - name: ce
+      ignore: true
+      scale: 1
+    - name: mae
+      ignore: false
+      scale: 10
+    - name: mse
+      ignore: false
+      scale: 10
+    - name: topk
+      ignore: false
+      scale: 1
+    - name: r2
+      ignore: true
+      scale: 1
+    - name: kl
+      ignore: false
+      scale: 1
+    - name: accuracy
+      ignore: true
+      scale: 1
+    - name: top10
+      ignore: false
+      scale: 1
+    - name: top30
+      ignore: false
+      scale: 1
+
+# ================================================================
+# PYTORCH LIGHTNING TRAINER
+# ================================================================
+trainer:
+  accelerator: "gpu"
+  devices: 1
+  strategy: "auto"
+  num_nodes: 1
+  max_epochs: 100
+  min_epochs: 1
+  max_steps: -1
+  min_steps: 0
+  precision: 16
+  gradient_clip_val: 0.5
+  gradient_clip_algorithm: "norm"
+  accumulate_grad_batches: 4
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 200
+  flush_logs_every_n_steps: 100
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: true
+  benchmark: true
+  deterministic: false
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  fast_dev_run: false
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  logger: true
+  profiler: null
+  auto_lr_find: false
+  auto_scale_batch_size: false
+  resume_from_checkpoint: null
+
+# ================================================================
+# LOSSES
+# ================================================================
+losses:
+  criterion: "CE"
+  ce:
+    ignore: false
+    lambd_pres: 1.5
+    lambd_abs: 1.0
+  metrics:
+    - name: ce
+      ignore: true
+      scale: 1
+    - name: mae
+      ignore: false
+      scale: 10
+    - name: mse
+      ignore: false
+      scale: 10
+    - name: topk
+      ignore: false
+      scale: 1
+    - name: r2
+      ignore: true
+      scale: 1
+    - name: kl
+      ignore: false
+      scale: 1
+    - name: accuracy
+      ignore: true
+      scale: 1
+    - name: top10
+      ignore: false
+      scale: 1
+    - name: top30
+      ignore: false
+      scale: 1
+
+# ================================================================
+# CALLBACKS
+# ================================================================
+callbacks:
+  model_checkpoint:
+    dirpath: "runs/hgcp_fda_summer_seed42"
+    filename: "epoch{epoch:03d}_val_map{val_map:.4f}"
+    monitor: "val_map"
+    mode: "max"
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    every_n_epochs: 1
+
+  early_stopping:
+    monitor: "val_map"
+    mode: "max"
+    patience: 15
+    min_delta: 0.001
+    verbose: true
+
+  learning_rate: 0.0005
+  learning_rate_monitor:
+    logging_interval: "step"
+
+  rich_progress_bar:
+    refresh_rate: 1
+
+# ================================================================
+# LOGGING
+# ================================================================
+logging:
+  run_name: "hgcp_fda_summer"
+  enable_tensorboard: true
+  enable_csv: true
+
+logger:
+  tensorboard:
+    save_dir: "runs"
+    name: "hgcp_fda_summer_seed42"
+    version: null
+    default_hp_metric: false
+
+log_comet: false
+comet:
+  project_name: "satbird_hgcp_fda"
+  tags: ["hgcp", "fda", "dinov2", "innovation", "cross-domain"]
+
+loc:
+  use: false
+  concat: false
+  elev: false
+  num_checklists: false
+
+save_path: "runs"
+load_ckpt: ""
+save_preds_path: ""
+overfit_debug: false
+overfit_batches: 0.0
+max_epochs: 100
+base_dir: ""

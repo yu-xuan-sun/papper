@@ -1,0 +1,324 @@
+# @package _global_
+# DINOv2 Full Fine-tuning - No adapters, no prompts, no freezing
+# 完整微调所有参数
+
+args:
+  config: "configs/SatBird-USA-winter/dinov2_full_finetune.yaml"
+  base_dir: ""
+  run_id: 1
+  note: "dinov2_full_finetune - 全参数微调，无adapter/prompt"
+  no_comet: true
+  resume: false
+  tags: ["dinov2", "full_finetune", "winter"]
+  dev: false
+
+experiment:
+  task: "ebird_classifier"
+  name: "ebird_classifier"
+  dataset_name: "SatBird-USA-winter"
+  dataset_shortname: "winter"
+  exp_name: "dinov2_full_finetune_winter"
+  model_version: "full_finetune"
+  seed: 42
+  deterministic: false
+  
+  module:
+    model: "dinov2_full_finetune"
+    dino_model: "vit_base_patch14_dinov2.lvd142m"
+    pretrained: true
+    pretrained_path: "checkpoints/dinov2_vitb14_pretrain.pth"
+    
+    # 不使用通道适配器 - 直接使用RGB
+    use_channel_adapter: false
+    in_channels: 3
+    
+    # 不使用adapter
+    use_hierarchical_adapter: false
+    use_adapter_attn: false
+    use_adapter_mlp: false
+    
+    # 不使用prompt
+    prompt_len: 0
+    use_layer_specific_prompts: false
+    
+    # 不使用dropkey
+    use_dropkey: false
+    dropkey_rate: 0.0
+    
+    # 关键：不冻结任何参数，全部训练
+    freeze_backbone: false
+    unfreeze_last_n_blocks: 12
+    freeze: false
+    
+    transfer_weights: ""
+    resume: ""
+    init_bias: "none"
+    means_path: ""
+    
+    # 不使用环境特征
+    use_env: false
+    env_hidden_dim: 0
+    env_num_layers: 0
+    fusion_type: "none"
+    use_adaptive_fusion: false
+    
+    # 简单分类头
+    hidden_dims: [1024]
+    dropout: 0.1
+    
+    # 损失函数 - 使用BCE
+    loss_type: "bce"
+    use_class_weights: false
+    use_weighted_loss: false
+    use_ranking_loss: false
+    
+    # 全参数微调用非常小的学习率
+    learning_rate: 0.0002
+    lr: 0.0002
+    weight_decay: 0.01
+    optimizer: "adamw"
+    scheduler: "cosine"
+    warmup_epochs: 10
+    min_lr: 1.0e-8
+    
+    # 不使用数据增强trick
+    mixup_alpha: 0.0
+    cutmix_alpha: 0.0
+    label_smoothing: 0.0
+    drop_path_rate: 0.1
+  
+  training:
+    batch_size: 32
+    num_workers: 8
+    max_epochs: 200
+    val_check_interval: 1.0
+    val_frequency: 1
+    gradient_clip_val: 1.0
+    gradient_clip_algorithm: "norm"
+    accumulate_grad_batches: 8
+    precision: "16-mixed"
+    save_top_k: 3
+    monitor: "val_map"
+    mode: "max"
+    log_every_n_steps: 50
+
+  testing:
+    batch_size: 32
+    num_workers: 8
+
+variables: &default_vars
+  ped_means: &ped_means []
+  ped_std: &ped_std []
+  bioclim_means: &bioclim_means []
+  bioclim_std: &bioclim_std []
+  rgbnir_means: &rgbnir_means []
+  rgbnir_std: &rgbnir_std []
+  visual_means: &visual_means []
+  visual_stds: &visual_stds []
+
+data:
+  dataset_name: "SatBird-USA-winter"
+  data_dir: "USA_winter"
+  image_size: 224
+  channels: 3
+  bands: ["r", "g", "b"]
+  res: 10
+  datatype: "refl"
+  env: []
+  env_var_sizes: []
+  concat_env_to_sat: false
+  species: []
+  total_species: 670
+
+  files:
+    base: "USA_winter"
+    train: "train_split.csv"
+    val: "valid_split.csv"
+    test: "test_split.csv"
+    targets_folder: "targets"
+    env_data_folder: "environmental"
+    images_folder: "images"
+    species_list: "species_list.txt"
+    correction_thresh: ""
+    rgb_means: "stats/means_rgbnir.npy"
+    rgb_stds: "stats/stds_rgbnir.npy"
+    rgbnir_means: "stats/means_rgbnir.npy"
+    rgbnir_stds: "stats/stds_rgbnir.npy"
+    env_means: "stats/env_means.npy"
+    env_stds: "stats/env_stds.npy"
+
+  target:
+    type: "probs"
+    subset: null
+  correction_factor:
+    thresh: null
+  multiscale: []
+  multiscale_bands: []
+  multiscale_agg: "features"
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+
+  loaders:
+    num_workers: 8
+    batch_size: 32
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  transforms:
+    - name: matchres
+      ignore: false
+      target_size: [224,224]
+      custom_means: [*bioclim_means, *ped_means]
+    - name: crop
+      ignore: false
+      p: 1.0
+      ignore_band: ["bioclim","ped"]
+      center: false
+      height: 224
+      width: 224
+    - name: hflip
+      ignore: "val"
+      p: 0.5
+    - name: vflip
+      ignore: "val"
+      p: 0.5
+    - name: normalize
+      normalize_by_255: false
+      ignore: false
+      maxchan: false
+      subset: ["sat"]
+      custom: [*rgbnir_means, *rgbnir_std]
+
+optimizer: "adamw"
+
+scheduler:
+  name: "WarmUp"
+  warmup:
+    warmup_epochs: 10
+    max_epochs: 200
+  step_lr:
+    step_size: 10
+    gamma: 0.5
+  reduce_lr_plateau:
+    factor: 0.1
+    lr_schedule_patience: 5
+  cyclical:
+    warmup_epochs: 10
+  bce:
+    ignore: false
+    lambd_pres: 1
+    lambd_abs: 1
+  ce:
+    ignore: true
+    lambd_pres: 1
+    lambd_abs: 1
+  metrics:
+    - name: mae
+      ignore: false
+      scale: 10
+    - name: mse
+      ignore: false
+      scale: 10
+    - name: topk
+      ignore: false
+      scale: 1
+    - name: kl
+      ignore: false
+      scale: 1
+    - name: top10
+      ignore: false
+      scale: 1
+    - name: top30
+      ignore: false
+      scale: 1
+
+trainer:
+  accelerator: "gpu"
+  devices: 1
+  strategy: null
+  num_nodes: 1
+  max_epochs: 200
+  min_epochs: 1
+  max_steps: -1
+  min_steps: 0
+  precision: 16
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+  accumulate_grad_batches: 8
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+  flush_logs_every_n_steps: 100
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: true
+  benchmark: true
+  deterministic: false
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  fast_dev_run: false
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  logger: true
+  profiler: null
+  auto_lr_find: false
+  auto_scale_batch_size: false
+  resume_from_checkpoint: null
+
+callbacks:
+  model_checkpoint:
+    dirpath: "runs/dinov2_full_finetune_winter_seed42"
+    filename: "epoch{epoch:03d}_val_map{val_map:.4f}"
+    monitor: "val_map"
+    mode: "max"
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    every_n_epochs: 1
+  early_stopping:
+    monitor: "val_map"
+    mode: "max"
+    patience: 15
+    min_delta: 0.001
+    verbose: true
+  learning_rate: 0.00001
+  learning_rate_monitor:
+    logging_interval: "step"
+  rich_progress_bar:
+    refresh_rate: 1
+
+logging:
+  run_name: "dinov2_full_finetune_winter"
+  enable_tensorboard: true
+  enable_csv: true
+
+logger:
+  tensorboard:
+    save_dir: "runs"
+    name: "dinov2_full_finetune_winter_seed42"
+    version: null
+    default_hp_metric: false
+
+log_comet: false
+comet:
+  project_name: "satbird_full_finetune"
+  tags: ["dinov2", "full_finetune", "winter"]
+
+loc:
+  use: false
+  concat: false
+  elev: false
+  num_checklists: false
+
+save_path: ""
+load_ckpt: ""
+save_preds_path: ""
+overfit_debug: false
+overfit_batches: 0.0
+max_epochs: 200
+base_dir: ""

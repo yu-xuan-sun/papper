@@ -1,0 +1,274 @@
+args:
+  config: configs/transfer_learning/geo_transfer_finetune.yaml
+  base_dir: ''
+  run_id: 1
+  note: 'Geographic Transfer Full Fine-tune: USA -> Kenya'
+  no_comet: true
+  resume: false
+  tags: &id001
+  - transfer
+  - geographic
+  - finetune
+  dev: false
+experiment:
+  task: ebird_classifier
+  name: ebird_classifier
+  dataset_name: SatBird-Kenya
+  dataset_shortname: geo
+  exp_name: geo_transfer_finetune
+  model_version: finetune
+  seed: 42
+  deterministic: false
+  module:
+    model: dinov2_hgcp_fda
+    dino_model: vit_base_patch14_dinov2.lvd142m
+    pretrained: true
+    pretrained_path: checkpoints/dinov2_vitb14_pretrain.pth
+    transfer_from: runs/hgcp_fda_summer_seed42/checkpoints/last.ckpt
+    transfer_mode: finetune
+    reinit_classifier: true
+    reinit_env_encoder: true
+    use_channel_adapter: true
+    in_channels: 3
+    channel_adapter_type: learned
+    use_hierarchical_adapter: true
+    bottleneck_dim: 96
+    adapter_layers:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    adapter_dropout: 0.1
+    use_adapter_attn: true
+    use_adapter_mlp: true
+    adapter_configs:
+      early:
+        dim: 64
+        layers:
+        - 0
+        - 1
+        - 2
+        - 3
+      middle:
+        dim: 96
+        layers:
+        - 4
+        - 5
+        - 6
+        - 7
+      late:
+        dim: 128
+        layers:
+        - 8
+        - 9
+        - 10
+        - 11
+    prompt_len: 10
+    use_layer_specific_prompts: true
+    use_hgcp: true
+    hgcp_hidden_dim: 256
+    hgcp_dropout: 0.1
+    hgcp_rank: 16
+    use_channel_gate: true
+    hgcp_gate_init: -2.0
+    use_fda: true
+    fda_hidden_dim: 128
+    fda_low_freq_ratio: 0.25
+    fda_learnable_freq: true
+    fda_fusion_weight: 0.3
+    fda_dropout: 0.1
+    freeze_backbone: true
+    freeze_adapter: false
+    freeze_prompt: false
+    freeze_channel_adapter: false
+    freeze_hgcp: false
+    freeze_fda: false
+    freeze_classifier: false
+    unfreeze_last_n_blocks: 4
+    use_dropkey: true
+    dropkey_rate: 0.1
+    use_ranking_loss: false
+    env_hidden_dim: 512
+    env_num_layers: 3
+    fusion_type: adaptive_attention
+    use_adaptive_fusion: true
+    hidden_dims:
+    - 1024
+    - 512
+    dropout: 0.2
+    loss_type: custom_ce
+    use_class_weights: true
+    use_weighted_loss: true
+    presence_weight: 1.5
+    absence_weight: 1.0
+    learning_rate: 0.0002
+    lr: 0.0002
+    weight_decay: 0.02
+    optimizer: adamw
+    scheduler: WarmUp
+    warmup_epochs: 5
+    min_lr: 1.0e-06
+    mixup_alpha: 0.2
+    cutmix_alpha: 0.2
+    label_smoothing: 0.05
+    drop_path_rate: 0.1
+  training:
+    batch_size: 16
+    num_workers: 4
+    max_epochs: 100
+    val_check_interval: 1.0
+    val_frequency: 1
+    gradient_clip_val: 0.5
+    gradient_clip_algorithm: norm
+    accumulate_grad_batches: 4
+    precision: 16
+    save_top_k: 3
+    monitor: val_map
+    mode: max
+    log_every_n_steps: 100
+  testing:
+    batch_size: 16
+    num_workers: 4
+data:
+  dataset_name: SatBird-Kenya
+  dataset: SatBird-Kenya
+  data_dir: new_kenya2
+  image_size: 224
+  channels: 3
+  bands:
+  - r
+  - g
+  - b
+  res: 10
+  datatype: refl
+  env:
+  - bioclim
+  env_var_sizes:
+  - 19
+  concat_env_to_sat: false
+  species: []
+  total_species: 1054
+  files:
+    base: new_kenya2
+    train: train_split.csv
+    val: valid_split.csv
+    test: test_split.csv
+    targets_folder: targets
+    env_data_folder: environmental
+    images_folder: images
+    species_list: species_list.txt
+    correction_thresh: ''
+    rgb_means: stats/means_rgb.npy
+    rgb_stds: stats/stds_rgb.npy
+    rgbnir_means: stats/means_rgb.npy
+    rgbnir_stds: stats/stds_rgb.npy
+    env_means: stats/env_means.npy
+    env_stds: stats/env_stds.npy
+  target:
+    type: probs
+    subset: null
+  correction_factor:
+    thresh: null
+  multiscale: []
+  multiscale_bands: []
+  multiscale_agg: features
+  ped:
+    res: 250
+  bioclim:
+    res: 1000
+  loaders:
+    num_workers: 4
+    batch_size: 16
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+optimizer: adamw
+scheduler:
+  name: WarmUp
+  warmup:
+    warmup_epochs: 5
+    max_epochs: 100
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  num_nodes: 1
+  max_epochs: 100
+  min_epochs: 1
+  precision: 16
+  gradient_clip_val: 0.5
+  gradient_clip_algorithm: norm
+  accumulate_grad_batches: 4
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 100
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: true
+  benchmark: true
+  deterministic: false
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
+  fast_dev_run: false
+losses:
+  criterion: CE
+  ce:
+    ignore: false
+    lambd_pres: 1.5
+    lambd_abs: 1.0
+callbacks:
+  model_checkpoint:
+    dirpath: runs/geo_transfer_finetune_seed42
+    filename: epoch{epoch:03d}_val_map{val_map:.4f}
+    monitor: val_map
+    mode: max
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    every_n_epochs: 1
+  early_stopping:
+    monitor: val_map
+    mode: max
+    patience: 15
+    min_delta: 0.001
+    verbose: true
+  learning_rate_monitor:
+    logging_interval: step
+  rich_progress_bar:
+    refresh_rate: 1
+logging:
+  run_name: geo_transfer_finetune
+  enable_tensorboard: true
+  enable_csv: true
+logger:
+  tensorboard:
+    save_dir: runs
+    name: geo_transfer_finetune_seed42
+    version: null
+    default_hp_metric: false
+log_comet: false
+comet:
+  project_name: satbird_transfer
+  tags: *id001
+loc:
+  use: false
+  concat: false
+  elev: false
+  num_checklists: false
+save_path: runs
+load_ckpt: ''
+save_preds_path: ''
+overfit_debug: false
+overfit_batches: 0.0
+max_epochs: 100
+base_dir: ''
