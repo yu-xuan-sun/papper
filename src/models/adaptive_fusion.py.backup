@@ -1,0 +1,105 @@
+"""
+Adaptive Environmental Fusion (AEF)
+样本自适应的多模态融合机制
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class AdaptiveEnvironmentalFusion(nn.Module):
+    """自适应环境特征融合模块"""
+    
+    def __init__(self, img_dim=768, env_dim=27, hidden_dim=2048, num_heads=8, dropout=0.2):
+        super().__init__()
+        
+        self.img_dim = img_dim
+        self.env_dim = env_dim
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        
+        # 环境编码器
+        self.env_encoder = nn.Sequential(
+            nn.Linear(env_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, img_dim),
+            nn.LayerNorm(img_dim)
+        )
+        
+        # Cross-Attention
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=img_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        # 门控网络
+        self.gate = nn.Sequential(
+            nn.Linear(img_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, img_dim),
+            nn.LayerNorm(img_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(img_dim, 1),
+            nn.Sigmoid()
+        )
+        
+        # Temperature
+        self.temperature = nn.Parameter(torch.tensor(0.1))
+        
+        self.norm1 = nn.LayerNorm(img_dim)
+        self.norm2 = nn.LayerNorm(img_dim)
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+    
+    def forward(self, img_features, env_features, return_alpha=False):
+        """前向传播"""
+        batch_size = img_features.size(0)
+        
+        # 编码环境特征
+        env_encoded = self.env_encoder(env_features)
+        
+        # Cross-attention
+        img_feat_expanded = img_features.unsqueeze(1)
+        env_feat_expanded = env_encoded.unsqueeze(1)
+        
+        attn_out, attn_weights = self.cross_attn(
+            query=img_feat_expanded,
+            key=env_feat_expanded,
+            value=env_feat_expanded
+        )
+        
+        attn_out = attn_out.squeeze(1)
+        attn_out = self.norm1(attn_out + img_features)
+        
+        # 门控机制
+        concat_feat = torch.cat([img_features, env_encoded], dim=1)
+        alpha = self.gate(concat_feat)
+        alpha = alpha / (self.temperature.abs() + 1e-8)
+        alpha = torch.sigmoid(alpha)
+        
+        # 自适应融合
+        fused = alpha * attn_out + (1 - alpha) * img_features
+        fused = self.norm2(fused)
+        
+        if return_alpha:
+            return fused, alpha
+        return fused
